@@ -50,8 +50,8 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "8mb" }));
 app.use(express.urlencoded({ extended: true, limit: "8mb" }));
 
-// Serve static files from public directory
-app.use(express.static(path.join(__dirname, "public")));
+// Serve static files from public directory without auto-indexing '/'
+app.use(express.static(path.join(__dirname, "public"), { index: false }));
 
 // Also expose the actively developed frontend from the sibling FRONTEND folder.
 const FRONTEND_DIR = path.join(__dirname, '..', 'FRONTEND');
