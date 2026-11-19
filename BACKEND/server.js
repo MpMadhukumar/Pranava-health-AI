@@ -51,17 +51,8 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "8mb" }));
 app.use(express.urlencoded({ extended: true, limit: "8mb" }));
 
-// Serve static files from public directory without auto-indexing '/'
-app.use(express.static(path.join(__dirname, "public"), { index: false }));
-
-// Also expose the actively developed frontend from the sibling FRONTEND folder.
-const FRONTEND_DIR = path.join(__dirname, '..', 'FRONTEND');
-app.use('/app', express.static(FRONTEND_DIR));
-// Support links such as "/ai-chat.html" from pages opened at the site root.
-app.use(express.static(FRONTEND_DIR, { index: false }));
-app.get('/app', (_req, res) => {
-  res.sendFile(path.join(FRONTEND_DIR, 'welcome.html'));
-});
+// Serve static files from public directory
+app.use(express.static(path.join(__dirname, "public")));
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -185,7 +176,7 @@ async function groqGenerate(contents) {
   const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_API_KEY}` },
-    body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages, temperature: 0.7 })
+    body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages, temperature: 0.7 })
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -221,7 +212,17 @@ async function geminiOnlyGenerate({ contents, model = GEMINI_MODEL }, retryCount
 }
 
 async function geminiGenerate({ contents, model = GEMINI_MODEL }, retryCount = 0) {
-  // Gemini controls the response format and schema. Groq is used only as fallback.
+  // Try Groq FIRST — faster and more reliable (text only)
+  if (GROQ_API_KEY) {
+    try {
+      console.log('🚀 Using Groq (primary)...');
+      return await groqGenerate(contents);
+    } catch (groqErr) {
+      console.warn('⚠️ Groq failed, falling back to Gemini:', groqErr.message);
+    }
+  }
+
+  // Gemini as fallback
   const maxRetries = 2;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
   
@@ -250,14 +251,6 @@ async function geminiGenerate({ contents, model = GEMINI_MODEL }, retryCount = 0
     const out = json?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("\n") || "";
     return out;
   } catch (error) {
-    if (GROQ_API_KEY) {
-      try {
-        console.warn(`⚠️ Gemini failed (${error.message}), falling back to Groq for text generation`);
-        return await groqGenerate(contents);
-      } catch (groqError) {
-        throw new Error(`${error.message}; Groq fallback failed: ${groqError.message}`);
-      }
-    }
     throw error;
   }
 }
@@ -1867,9 +1860,7 @@ async function simulateMatlabCoughAnalysis(audioFile) {
 // Real MATLAB integration function
 async function callMatlabAnalysis(audioFile) {
   const { promises: fsPromises } = await import('fs');
-  const { exec, execFile } = await import('child_process');
-  const ffmpegStaticModule = await import('ffmpeg-static');
-  const ffmpegPath = ffmpegStaticModule.default || ffmpegStaticModule;
+  const { exec } = await import('child_process');
   
   try {
     // Save audio file temporarily - keep original extension
@@ -1889,40 +1880,6 @@ async function callMatlabAnalysis(audioFile) {
     await fsPromises.writeFile(tempFilePath, audioFile.buffer);
     
     console.log(`📁 Saved temp file: ${tempFilePath}`);
-
-    let analysisFilePath = tempFilePath;
-    const cleanupFiles = [tempFilePath];
-
-    // Convert browser-recorded formats (webm/ogg/mp3/...) to wav for MATLAB.
-    if (ext.toLowerCase() !== '.wav') {
-      const wavFilePath = path.join(tempDir, `cough_${Date.now()}_converted.wav`);
-      try {
-        if (!ffmpegPath) {
-          throw new Error('ffmpeg-static binary not found');
-        }
-        console.log(`🔁 Converting ${ext} to wav using ffmpeg...`);
-        await new Promise((resolve, reject) => {
-          execFile(
-            ffmpegPath,
-            ['-y', '-i', tempFilePath, '-ac', '1', '-ar', '44100', wavFilePath],
-            { windowsHide: true },
-            (ffmpegError, _stdout, stderr) => {
-              if (ffmpegError) {
-                const msg = (stderr || ffmpegError.message || '').toString().slice(-400);
-                reject(new Error(`ffmpeg conversion failed: ${msg}`));
-                return;
-              }
-              resolve();
-            }
-          );
-        });
-        analysisFilePath = wavFilePath;
-        cleanupFiles.push(wavFilePath);
-        console.log(`✅ Converted audio saved: ${wavFilePath}`);
-      } catch (convertErr) {
-        console.warn(`⚠️ Audio conversion failed, MATLAB may use fallback logic: ${convertErr.message}`);
-      }
-    }
     
     // Use MATLAB path from environment or default
     const matlabExe = MATLAB_PATH;
@@ -1940,7 +1897,7 @@ async function callMatlabAnalysis(audioFile) {
     const backendPath = __dirname;
     
     // Use the simpler cough_analysis.m which is self-contained
-    const matlabCommand = `"${matlabExe}" -batch "addpath('${backendPath}'); result = cough_analysis('${analysisFilePath}'); exit"`;
+    const matlabCommand = `"${matlabExe}" -batch "addpath('${backendPath}'); result = cough_analysis('${tempFilePath}'); exit"`;
     
     console.log(`🔬 Executing MATLAB analysis...`);
     console.log(`📁 MATLAB command: ${matlabCommand.substring(0, 150)}...`);
@@ -1960,8 +1917,8 @@ async function callMatlabAnalysis(audioFile) {
           if (stderr) console.warn('⚠️ MATLAB stderr:', stderr);
           
           // Read results file that MATLAB should create
-          const parsedInput = path.parse(analysisFilePath);
-          const resultFile = path.join(parsedInput.dir, `${parsedInput.name}_result.json`);
+          const baseFilePath = tempFilePath.replace(ext, '');
+          const resultFile = `${baseFilePath}_result.json`;
           
           // Parse MATLAB output - Check if result file exists FIRST
           let results;
@@ -1976,9 +1933,7 @@ async function callMatlabAnalysis(audioFile) {
               results = parseMatlabOutput(stdout);
             } catch (parseError) {
               console.error('❌ Failed to parse MATLAB output:', parseError);
-              for (const f of cleanupFiles) {
-                await fsPromises.unlink(f).catch(() => {});
-              }
+              await fsPromises.unlink(tempFilePath).catch(() => {});
               reject(new Error(`MATLAB parsing failed: ${parseError.message}`));
               return;
             }
@@ -1987,17 +1942,13 @@ async function callMatlabAnalysis(audioFile) {
           // Only report error if we couldn't get results
           if (error && !results) {
             console.error('❌ MATLAB execution error:', error.message);
-            for (const f of cleanupFiles) {
-              await fsPromises.unlink(f).catch(() => {});
-            }
+            await fsPromises.unlink(tempFilePath).catch(() => {}); // cleanup
             reject(new Error(`MATLAB execution failed: ${error.message}`));
             return;
           }
           
           // Clean up temp files
-          for (const f of cleanupFiles) {
-            await fsPromises.unlink(f).catch(() => {});
-          }
+          await fsPromises.unlink(tempFilePath).catch(() => {});
           try {
             await fsPromises.unlink(resultFile);
           } catch (e) {
@@ -3364,13 +3315,8 @@ app.put('/api/online-doctors/availability', authenticateToken, async (req, res) 
 });
 
 // -------------------------------------------------------------------------------------
-// Root endpoint - Serve latest FRONTEND
+// Root endpoint
 app.get('/', (req, res) => {
-  res.sendFile(path.join(FRONTEND_DIR, 'welcome.html'));
-});
-
-// API status endpoint
-app.get('/api/status', (req, res) => {
   res.json({ 
     message: 'Welcome to Pranava Health AI API',
     status: 'online',
