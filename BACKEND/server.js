@@ -30,6 +30,7 @@ const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 const MATLAB_PATH = process.env.MATLAB_PATH || 'C:\\Program Files\\MATLAB\\R2025b\\bin\\matlab.exe';
 const MATLAB_CODE_PATH = process.env.MATLAB_CODE_PATH || 'C:\\Users\\Madhukumar\\OneDrive\\Desktop\\MATHLAB COUGH PREDICTOR';
 
@@ -195,7 +196,7 @@ async function groqGenerate(contents) {
 }
 
 // Gemini-only: used for image analysis where Groq vision is not accurate enough
-async function geminiOnlyGenerate({ contents, model = "gemini-2.5-flash" }, retryCount = 0) {
+async function geminiOnlyGenerate({ contents, model = GEMINI_MODEL }, retryCount = 0) {
   const maxRetries = 2;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
   const res = await fetch(url, {
@@ -219,18 +220,8 @@ async function geminiOnlyGenerate({ contents, model = "gemini-2.5-flash" }, retr
   return json?.candidates?.[0]?.content?.parts?.filter(p => !p.thought)?.map((p) => p.text || "").join("\n") || "";
 }
 
-async function geminiGenerate({ contents, model = "gemini-2.5-flash" }, retryCount = 0) {
-  // Try Groq FIRST — faster and more reliable (text only)
-  if (GROQ_API_KEY) {
-    try {
-      console.log('🚀 Using Groq (primary)...');
-      return await groqGenerate(contents);
-    } catch (groqErr) {
-      console.warn('⚠️ Groq failed, falling back to Gemini:', groqErr.message);
-    }
-  }
-
-  // Gemini as fallback
+async function geminiGenerate({ contents, model = GEMINI_MODEL }, retryCount = 0) {
+  // Gemini controls the response format and schema. Groq is used only as fallback.
   const maxRetries = 2;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
   
@@ -259,6 +250,14 @@ async function geminiGenerate({ contents, model = "gemini-2.5-flash" }, retryCou
     const out = json?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("\n") || "";
     return out;
   } catch (error) {
+    if (GROQ_API_KEY) {
+      try {
+        console.warn(`⚠️ Gemini failed (${error.message}), falling back to Groq for text generation`);
+        return await groqGenerate(contents);
+      } catch (groqError) {
+        throw new Error(`${error.message}; Groq fallback failed: ${groqError.message}`);
+      }
+    }
     throw error;
   }
 }
