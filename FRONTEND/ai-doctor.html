@@ -276,7 +276,7 @@ async function send(){
   addMessage(msg,true);history.push({role:'user',content:msg});
   inp.value='';btn.disabled=true;showTyping();
   try{
-    var res=await fetch('https://my-medicalapp.onrender.com/api/ai-doctor/consult',{
+    var res=await fetch('https://pranava-health-ai-1.onrender.com/api/ai-doctor/consult',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:msg,conversationHistory:history,currentStep:step})
     });
