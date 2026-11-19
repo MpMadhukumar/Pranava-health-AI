@@ -56,6 +56,8 @@ app.use(express.static(path.join(__dirname, "public"), { index: false }));
 // Also expose the actively developed frontend from the sibling FRONTEND folder.
 const FRONTEND_DIR = path.join(__dirname, '..', 'FRONTEND');
 app.use('/app', express.static(FRONTEND_DIR));
+// Support links such as "/ai-chat.html" from pages opened at the site root.
+app.use(express.static(FRONTEND_DIR, { index: false }));
 app.get('/app', (_req, res) => {
   res.sendFile(path.join(FRONTEND_DIR, 'welcome.html'));
 });
@@ -182,7 +184,7 @@ async function groqGenerate(contents) {
   const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_API_KEY}` },
-    body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages, temperature: 0.7 })
+    body: JSON.stringify({ model: 'openai/gpt-oss-20b', messages, temperature: 0.7 })
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
